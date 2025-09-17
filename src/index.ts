@@ -160,6 +160,18 @@ const pushRoomState = (room: Room) => {
   broadcastToRoom(room, { type: "roomState", payload: snapshot });
 };
 
+const removeControllerFromRoom = (room: Room, controllerId: string) => {
+  const controller = room.controllers.get(controllerId);
+  if (!controller) return;
+
+  if (controller.boundPlayerId) {
+    const player = room.players.get(controller.boundPlayerId);
+    player?.controllerIds.delete(controllerId);
+  }
+
+  room.controllers.delete(controllerId);
+};
+
 const asRoomSocket = (socket: unknown): RoomSocket => socket as RoomSocket;
 
 const resolveRoomFromSocket = (
@@ -196,9 +208,8 @@ const detachSocket = (socket: unknown) => {
   }
 
   if (controllerId && room.controllers.has(controllerId)) {
-    const controller = room.controllers.get(controllerId)!;
-    controller.socket = null;
-    controller.status = controller.boundPlayerId ? "paired" : "idle";
+    removeControllerFromRoom(room, controllerId);
+    ws.data.controllerId = null;
     pushRoomState(room);
   }
 };
@@ -600,10 +611,7 @@ const app = new Elysia()
           });
       }
     },
-  });
+  })
+  .listen(3000, () => console.log("Server started on http://localhost:3000"));
 
-if (import.meta.main) {
-  app.listen(3000, () => console.log("Server started on http://localhost:3000"));
-}
-
-export default app;
+// export default app;

@@ -40,8 +40,9 @@ network.on("controllerRegistered", ({ controllerId, room }) => {
   controllerIdLabel.textContent = controllerId ?? "-";
   statusSection.hidden = false;
   sensorSection.hidden = false;
-  sensorButton.disabled = false;
+  sensorButton.disabled = deviceController.hasPermission();
   log(`컨트롤러 등록 완료. 플레이어에게 배정을 기다리세요.`);
+  ensureSensorStreaming();
 });
 
 network.on("error", ({ message }) => {
@@ -69,6 +70,7 @@ const log = (message) => {
 
 const deviceController = new DeviceMotionController({
   statusElement: sensorStatusEl,
+  autoStart: false,
   onMotion: (motion) => {
     state.latestMotion = motion;
     maybeSendInput();
@@ -81,7 +83,12 @@ const deviceController = new DeviceMotionController({
   },
 });
 
-deviceController.stopListeners();
+const ensureSensorStreaming = () => {
+  if (!deviceController.hasPermission()) return;
+  if (!deviceController.isActive()) {
+    deviceController.startListeners();
+  }
+};
 
 const maybeSendInput = () => {
   if (!state.controllerId) return;
@@ -118,6 +125,7 @@ sensorButton.addEventListener("click", async () => {
   if (granted) {
     sensorButton.disabled = true;
     log("센서 권한 허용됨");
+    ensureSensorStreaming();
   }
 });
 
