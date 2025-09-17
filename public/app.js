@@ -2,6 +2,8 @@ import { GameScene } from "./game/GameScene.js";
 import { NetworkClient } from "./net/NetworkClient.js";
 
 const canvas = document.getElementById("gameCanvas");
+const canvasStage = canvas?.parentElement ?? null;
+if (canvasStage) canvasStage.dataset.match = "idle";
 const wsStatusEl = document.getElementById("wsStatus");
 const sensorStatusEl = document.getElementById("sensorStatus");
 const lobbyPanel = document.querySelector('[data-panel="lobby"]');
@@ -37,6 +39,7 @@ const state = {
   playerId: null,
   room: null,
   controllerLink: null,
+  matchStatus: "idle",
   keyboard: {
     forward: 0,
     right: 0,
@@ -71,7 +74,19 @@ network.on("roomState", (payload) => {
 });
 
 network.on("playerMotion", ({ playerId, data }) => {
-  if (!playerId || playerId === state.playerId) return;
+  if (!playerId) return;
+  if (playerId === state.playerId) {
+    if (data?.orientation) {
+      game.updatePlayerOrientation(data.orientation);
+    }
+    if (data?.acceleration || data?.interval) {
+      game.updatePlayerMotion({
+        acceleration: data?.acceleration,
+        interval: data?.interval,
+      });
+    }
+    return;
+  }
   game.applyRemoteMotion(playerId, data);
 });
 
@@ -108,6 +123,8 @@ const activateArena = () => {
   controlDock.removeAttribute("hidden");
   arenaMain.classList.add("active");
   qrButton.disabled = false;
+  if (canvasStage) canvasStage.dataset.match = state.matchStatus ?? "idle";
+  game.refreshViewport?.();
 };
 
 const resetToLobby = () => {
@@ -119,7 +136,11 @@ const resetToLobby = () => {
   qrButton.disabled = true;
   state.playerId = null;
   state.room = null;
+  state.matchStatus = "idle";
+  if (canvasStage) canvasStage.dataset.match = "idle";
   game.syncRoster([]);
+  game.setMatchState?.("idle");
+  game.setLocalPlayerTeam?.("A", "player");
 };
 
 const renderRoomState = (room) => {
@@ -127,6 +148,31 @@ const renderRoomState = (room) => {
   game.setLocalPlayerId(state.playerId);
   const players = room.players ?? [];
   game.syncRoster(players);
+
+  const previousMatchStatus = state.matchStatus ?? "idle";
+  const nextMatchStatus = room.match?.status ?? "idle";
+  if (previousMatchStatus !== nextMatchStatus) {
+    state.matchStatus = nextMatchStatus;
+    game.setMatchState?.(nextMatchStatus);
+    if (canvasStage) canvasStage.dataset.match = nextMatchStatus;
+    switch (nextMatchStatus) {
+      case "countdown":
+        showOverlay("경기 시작 준비", 1200);
+        break;
+      case "playing":
+        showOverlay("경기 시작!", 1600);
+        break;
+      case "finished":
+        showOverlay("경기 종료", 2000);
+        break;
+      default:
+        hideOverlay();
+    }
+  }
+
+  if (canvasStage) {
+    canvasStage.dataset.match = state.matchStatus ?? "idle";
+  }
 
   roomCodeLabel.textContent = room.code ?? "-----";
   matchStatusLabel.textContent = formatMatchStatus(room.match);
@@ -389,13 +435,63 @@ const updateQrLink = () => {
   state.controllerLink = url.toString();
 };
 
+const renderQrCodeToCanvas = (canvas, value) => {
+  if (!canvas || !value) return false;
+  if (typeof qrcode === "undefined") return false;
+
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(value);
+    qr.make();
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+
+    const modules = qr.getModuleCount();
+    const size = canvas.width;
+    const padding = Math.max(12, Math.floor(size * 0.08));
+    const tileSize = Math.max(1, Math.floor((size - padding * 2) / modules));
+    const offset = Math.floor((size - tileSize * modules) / 2);
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "#04111b";
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = "#ffffff";
+
+    for (let row = 0; row < modules; row += 1) {
+      for (let col = 0; col < modules; col += 1) {
+        if (qr.isDark(row, col)) {
+          ctx.fillRect(offset + col * tileSize, offset + row * tileSize, tileSize, tileSize);
+        }
+      }
+    }
+
+    return true;
+  } catch (error) {
+    console.error("QR code render error", error);
+    return false;
+  }
+};
+
 qrButton?.addEventListener("click", () => {
   if (!state.controllerLink) return;
-  if (typeof QRCode !== "undefined") {
-    QRCode.toCanvas(qrCanvas, state.controllerLink, { width: 260 });
-  }
+  const rendered = renderQrCodeToCanvas(qrCanvas, state.controllerLink);
   qrLink.textContent = state.controllerLink;
-  qrDialog.showModal();
+
+  if (!rendered) {
+    qrLink.textContent = `${state.controllerLink} (QR 생성을 지원하지 않습니다)`;
+  }
+
+  if (typeof qrDialog?.showModal === "function") {
+    try {
+      qrDialog.showModal();
+    } catch (error) {
+      console.warn("Failed to open QR dialog", error);
+      window.open(state.controllerLink, "_blank");
+    }
+  } else {
+    window.open(state.controllerLink, "_blank");
+  }
 });
 
 closeQrBtn?.addEventListener("click", () => {

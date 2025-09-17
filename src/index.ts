@@ -360,6 +360,18 @@ const app = new Elysia()
             return;
           }
 
+          const previousRoomCode = ws.data.roomCode;
+          const previousControllerId = ws.data.controllerId;
+          if (previousRoomCode && previousControllerId) {
+            const previousRoom = rooms.get(previousRoomCode);
+            if (previousRoom) {
+              removeControllerFromRoom(previousRoom, previousControllerId);
+              if (previousRoom !== room) {
+                pushRoomState(previousRoom);
+              }
+            }
+          }
+
           const controllerId = randomId();
           const controller: Controller = {
             id: controllerId,
