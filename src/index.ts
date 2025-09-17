@@ -1,6 +1,5 @@
 import staticPlugin from "@elysiajs/static";
 import { Elysia } from "elysia";
-import type { WSContext } from "elysia";
 
 type Visibility = "public" | "private";
 type PlayerMode = "player" | "spectator";
@@ -31,7 +30,7 @@ type Controller = {
   name: string;
   status: ControllerStatus;
   boundPlayerId: string | null;
-  socket: WSContext<ConnectionState> | null;
+  socket: RoomSocket | null;
   lastSeen: number;
 };
 
@@ -42,7 +41,12 @@ type MatchState = {
   durationSeconds: number;
 };
 
-type RoomSocket = WSContext<ConnectionState>;
+type RoomSocket = {
+  id?: string;
+  data: ConnectionState;
+  send: (data: string) => void;
+  close: (code?: number, reason?: string) => void;
+} & Record<string, unknown>;
 
 type Room = {
   code: string;
@@ -156,24 +160,28 @@ const pushRoomState = (room: Room) => {
   broadcastToRoom(room, { type: "roomState", payload: snapshot });
 };
 
+const asRoomSocket = (socket: unknown): RoomSocket => socket as RoomSocket;
+
 const resolveRoomFromSocket = (
-  socket: RoomSocket,
+  socket: unknown,
 ): Room | null => {
-  const code = socket.data.roomCode;
+  const ws = asRoomSocket(socket);
+  const code = ws.data.roomCode;
   if (!code) return null;
   return rooms.get(code) ?? null;
 };
 
-const detachSocket = (socket: RoomSocket) => {
-  const room = resolveRoomFromSocket(socket);
+const detachSocket = (socket: unknown) => {
+  const ws = asRoomSocket(socket);
+  const room = resolveRoomFromSocket(ws);
   if (!room) return;
 
-  const { playerId, controllerId } = socket.data;
+  const { playerId, controllerId } = ws.data;
 
   if (playerId && room.players.has(playerId)) {
     const player = room.players.get(playerId)!;
     player.connected = false;
-    room.displays.delete(socket);
+    room.displays.delete(ws);
 
     if (player.isHost) {
       room.hostPlayerId = Array.from(room.players.values()).find((p) => p.connected)?.id ?? player.id;
@@ -197,26 +205,29 @@ const detachSocket = (socket: RoomSocket) => {
 
 const app = new Elysia()
   .use(staticPlugin({ assets: "public", prefix: "/", indexHTML: true }))
-  .ws<ConnectionState>("/ws", {
+  .ws("/ws", {
     open: (socket) => {
-      socket.data = {
+      const ws = asRoomSocket(socket);
+      ws.data = {
         clientId: randomId(),
         role: null,
         roomCode: null,
         playerId: null,
         controllerId: null,
       };
-      console.log("Client connected", socket.id);
-      sendJson(socket, {
+      console.log("Client connected", ws.id);
+      sendJson(ws, {
         type: "handshake",
-        payload: { clientId: socket.data.clientId },
+        payload: { clientId: ws.data.clientId },
       });
     },
     close: (socket) => {
-      console.log("Client disconnected", socket.id);
-      detachSocket(socket);
+      const ws = asRoomSocket(socket);
+      console.log("Client disconnected", ws.id);
+      detachSocket(ws);
     },
     message: (socket, raw) => {
+      const ws = asRoomSocket(socket);
       let payload: IncomingMessage | null = null;
       if (typeof raw === "string") {
         try {
@@ -274,15 +285,15 @@ const app = new Elysia()
           };
 
           room.players.set(playerId, hostPlayer);
-          room.displays.add(socket);
+          room.displays.add(ws);
 
-          socket.data.role = "display";
-          socket.data.roomCode = room.code;
-          socket.data.playerId = playerId;
+          ws.data.role = "display";
+          ws.data.roomCode = room.code;
+          ws.data.playerId = playerId;
 
           rooms.set(room.code, room);
 
-          sendJson(socket, {
+          sendJson(ws, {
             type: "roomCreated",
             payload: { room: serializeRoom(room), playerId },
           });
@@ -298,7 +309,7 @@ const app = new Elysia()
 
           const room = rooms.get(roomCode);
           if (!room) {
-            sendJson(socket, { type: "error", payload: { message: "방을 찾을 수 없습니다." } });
+            sendJson(ws, { type: "error", payload: { message: "방을 찾을 수 없습니다." } });
             return;
           }
 
@@ -316,13 +327,13 @@ const app = new Elysia()
           };
 
           room.players.set(playerId, player);
-          room.displays.add(socket);
+          room.displays.add(ws);
 
-          socket.data.role = "display";
-          socket.data.roomCode = room.code;
-          socket.data.playerId = playerId;
+          ws.data.role = "display";
+          ws.data.roomCode = room.code;
+          ws.data.playerId = playerId;
 
-          sendJson(socket, {
+          sendJson(ws, {
             type: "joinedRoom",
             payload: { room: serializeRoom(room), playerId },
           });
@@ -334,7 +345,7 @@ const app = new Elysia()
           const name = String(body?.name ?? "모바일").slice(0, 32);
           const room = rooms.get(roomCode);
           if (!room) {
-            sendJson(socket, { type: "error", payload: { message: "방을 찾을 수 없습니다." } });
+            sendJson(ws, { type: "error", payload: { message: "방을 찾을 수 없습니다." } });
             return;
           }
 
@@ -344,16 +355,16 @@ const app = new Elysia()
             name,
             status: "idle",
             boundPlayerId: null,
-            socket,
+            socket: ws,
             lastSeen: Date.now(),
           };
 
           room.controllers.set(controllerId, controller);
-          socket.data.role = "controller";
-          socket.data.roomCode = room.code;
-          socket.data.controllerId = controllerId;
+          ws.data.role = "controller";
+          ws.data.roomCode = room.code;
+          ws.data.controllerId = controllerId;
 
-          sendJson(socket, {
+          sendJson(ws, {
             type: "controllerRegistered",
             payload: { controllerId, room: serializeRoom(room) },
           });
@@ -361,13 +372,13 @@ const app = new Elysia()
           break;
         }
         case "bindController": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
 
-          const requester = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const requester = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!requester) return;
           if (!requester.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 컨트롤러를 연결할 수 있습니다." },
             });
@@ -392,17 +403,17 @@ const app = new Elysia()
           controller.status = "paired";
           player.controllerIds.add(controllerId);
 
-          sendJson(socket, { type: "controllerBound", payload: { controllerId, playerId } });
+          sendJson(ws, { type: "controllerBound", payload: { controllerId, playerId } });
           pushRoomState(room);
           break;
         }
         case "unbindController": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const requester = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const requester = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!requester) return;
           if (!requester.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 컨트롤러 연결을 해제할 수 있습니다." },
             });
@@ -423,11 +434,11 @@ const app = new Elysia()
           break;
         }
         case "updateSettings": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const requester = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const requester = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!requester?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 방 설정을 변경할 수 있습니다." },
             });
@@ -447,18 +458,18 @@ const app = new Elysia()
           break;
         }
         case "setPlayerMode": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
 
-          const targetPlayerId: string = body?.playerId ?? socket.data.playerId;
+          const targetPlayerId: string = body?.playerId ?? ws.data.playerId;
           const mode: PlayerMode = body?.mode === "spectator" ? "spectator" : "player";
 
-          const actor = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const actor = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           const target = targetPlayerId ? room.players.get(targetPlayerId) : null;
           if (!target) return;
 
           if (target.id !== actor?.id && !actor?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 다른 플레이어의 상태를 변경할 수 있습니다." },
             });
@@ -470,18 +481,18 @@ const app = new Elysia()
           break;
         }
         case "setPlayerTeam": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
 
-          const targetPlayerId: string = body?.playerId ?? socket.data.playerId;
+          const targetPlayerId: string = body?.playerId ?? ws.data.playerId;
           const team: TeamSide = body?.team === "A" ? "A" : body?.team === "B" ? "B" : "A";
 
-          const actor = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const actor = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           const target = targetPlayerId ? room.players.get(targetPlayerId) : null;
           if (!target) return;
 
           if (target.id !== actor?.id && !actor?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 다른 플레이어의 팀을 이동시킬 수 있습니다." },
             });
@@ -493,11 +504,11 @@ const app = new Elysia()
           break;
         }
         case "kickPlayer": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const actor = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const actor = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!actor?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 플레이어를 추방할 수 있습니다." },
             });
@@ -529,9 +540,9 @@ const app = new Elysia()
           break;
         }
         case "controllerInput": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const controllerId = socket.data.controllerId ?? body?.controllerId;
+          const controllerId = ws.data.controllerId ?? body?.controllerId;
           if (!controllerId) return;
           const controller = room.controllers.get(controllerId);
           if (!controller) return;
@@ -550,11 +561,11 @@ const app = new Elysia()
           break;
         }
         case "startMatch": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const actor = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const actor = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!actor?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 게임을 시작할 수 있습니다." },
             });
@@ -568,11 +579,11 @@ const app = new Elysia()
           break;
         }
         case "stopMatch": {
-          const room = resolveRoomFromSocket(socket);
+          const room = resolveRoomFromSocket(ws);
           if (!room) return;
-          const actor = socket.data.playerId ? room.players.get(socket.data.playerId) : null;
+          const actor = ws.data.playerId ? room.players.get(ws.data.playerId) : null;
           if (!actor?.isHost) {
-            sendJson(socket, {
+            sendJson(ws, {
               type: "error",
               payload: { message: "방장만 게임을 종료할 수 있습니다." },
             });
@@ -583,13 +594,16 @@ const app = new Elysia()
           break;
         }
         default:
-          sendJson(socket, {
+          sendJson(ws, {
             type: "error",
             payload: { message: `알 수 없는 명령: ${type}` },
           });
       }
     },
-  })
-  .listen(3000, () => console.log("Server started on http://localhost:3000"));
+  });
+
+if (import.meta.main) {
+  app.listen(3000, () => console.log("Server started on http://localhost:3000"));
+}
 
 export default app;
