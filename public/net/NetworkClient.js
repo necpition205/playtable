@@ -13,6 +13,9 @@ export class NetworkClient {
     this.socket = null;
     this.shouldAttemptReconnect = true;
     this.reconnectDelay = 1500;
+    this.listeners = new Map();
+    this.clientId = null;
+    this.hasConnectedOnce = false;
 
     if (this.url) {
       this.connect();
@@ -40,11 +43,15 @@ export class NetworkClient {
       if (this.socket !== socket) return;
       this._setStatus("WS: 연결됨", "success");
       this.reconnectDelay = 1500;
+      const reconnect = this.hasConnectedOnce;
+      this.hasConnectedOnce = true;
+      this._emit("open", { reconnect });
     });
 
     socket.addEventListener("close", () => {
       if (this.socket !== socket) return;
       this._setStatus("WS: 연결 끊김", "error");
+      this._emit("close", {});
       if (this.shouldAttemptReconnect) {
         this._scheduleReconnect();
       }
@@ -60,7 +67,13 @@ export class NetworkClient {
       if (this.socket !== socket) return;
       try {
         const payload = JSON.parse(event.data);
+        if (payload?.type) {
+          this._emit(payload.type, payload.payload, payload);
+        }
         this.onMessage(payload);
+        if (payload?.type === "handshake" && payload?.payload?.clientId) {
+          this.clientId = payload.payload.clientId;
+        }
       } catch (error) {
         console.warn("WS message parse error", error, event.data);
       }
@@ -91,8 +104,33 @@ export class NetworkClient {
     );
   }
 
-  sendMotion(payload) {
-    this.send("motion", payload);
+  sendControllerInput(payload) {
+    this.send("controllerInput", payload);
+  }
+
+  on(type, handler) {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type).add(handler);
+    return () => this.off(type, handler);
+  }
+
+  once(type, handler) {
+    const off = this.on(type, (...args) => {
+      off();
+      handler(...args);
+    });
+  }
+
+  off(type, handler) {
+    if (!this.listeners.has(type)) return;
+    this.listeners.get(type).delete(handler);
+  }
+
+  _emit(type, primary, raw) {
+    if (!this.listeners.has(type)) return;
+    this.listeners.get(type).forEach((handler) => handler(primary, raw));
   }
 
   _scheduleReconnect() {

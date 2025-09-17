@@ -3,36 +3,143 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PlayTable Motion Playground</title>
+  <title>PlayTable | Motion Arena</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js" defer></script>
 </head>
 <body>
-  <header class="app-header">
-    <h1>PlayTable Motion Playground</h1>
-    <p>Three.js + Device Sensors 프로토타입</p>
-  </header>
+  <div class="app-shell">
+    <aside class="panel lobby" data-panel="lobby">
+      <h1>PlayTable Arena</h1>
+      <p class="muted">데스크탑이 메인 스크린, 모바일은 컨트롤러</p>
 
-  <main class="app-main">
-    <section class="toolbar">
-      <button id="enableSensors">센서 활성화</button>
-      <span class="status" id="sensorStatus">센서 대기 중</span>
-      <span class="status" id="wsStatus">WS: 연결되지 않음</span>
-    </section>
+      <section class="panel-section" id="createRoomSection">
+        <h2>새 방 만들기</h2>
+        <form id="createRoomForm" class="form">
+          <label class="form-field">
+            <span>닉네임</span>
+            <input type="text" name="name" maxlength="24" value="코치" required>
+          </label>
+          <div class="form-grid">
+            <label class="form-field">
+              <span>타깃 점수</span>
+              <input type="number" name="targetScore" min="1" max="21" value="11" required>
+            </label>
+            <label class="form-field">
+              <span>게임 시간 (분)</span>
+              <input type="number" name="matchMinutes" min="1" max="60" value="10" required>
+            </label>
+          </div>
+          <label class="form-field">
+            <span>공개 여부</span>
+            <select name="visibility">
+              <option value="private">비공개</option>
+              <option value="public">공개</option>
+            </select>
+          </label>
+          <button class="primary" type="submit">방 생성</button>
+        </form>
+      </section>
 
-    <div class="canvas-wrapper">
-      <canvas id="gameCanvas"></canvas>
+      <section class="panel-section" id="joinRoomSection">
+        <h2>참여하기</h2>
+        <form id="joinRoomForm" class="form">
+          <label class="form-field">
+            <span>방 코드</span>
+            <input type="text" name="code" maxlength="6" placeholder="예) Q9FLK" required>
+          </label>
+          <label class="form-field">
+            <span>닉네임</span>
+            <input type="text" name="name" maxlength="24" required>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="spectator">
+            <span>관전 모드로 입장</span>
+          </label>
+          <button class="secondary" type="submit">입장</button>
+        </form>
+      </section>
+
+      <section class="panel-section">
+        <h2>QR 연결</h2>
+        <p class="muted small">모바일에서 컨트롤러 페이지를 열려면 QR 코드를 사용하세요.</p>
+        <button class="ghost" id="openQrBtn" disabled>QR 코드 보기</button>
+      </section>
+
+      <section class="panel-section info-block">
+        <h3>연결 상태</h3>
+        <ul class="status-list">
+          <li><span>WebSocket</span><strong id="wsStatus">연결되지 않음</strong></li>
+          <li><span>센서</span><strong id="sensorStatus">센서 대기 중</strong></li>
+        </ul>
+      </section>
+    </aside>
+
+    <main class="main" data-panel="arena">
+      <header class="arena-header" id="arenaHeader" hidden>
+        <div class="room-code">방 코드 <strong id="roomCodeLabel">-----</strong></div>
+        <div class="timer-stack">
+          <span class="label">경기 상태</span>
+          <strong id="matchStatus">대기 중</strong>
+        </div>
+        <div class="scoreboard">
+          <div class="team" data-team="A">
+            <span>TEAM A</span>
+            <strong id="scoreA">0</strong>
+          </div>
+          <div class="team" data-team="B">
+            <span>TEAM B</span>
+            <strong id="scoreB">0</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="canvas-stage">
+        <canvas id="gameCanvas"></canvas>
+        <div class="overlay" id="overlayMessage" hidden></div>
+      </section>
+
+      <section class="control-dock" id="controlDock" hidden>
+        <div class="host-controls" id="hostControls"></div>
+        <div class="player-actions" id="playerActions"></div>
+      </section>
+    </main>
+
+    <aside class="panel side" data-panel="players" hidden>
+      <section class="panel-section">
+        <h2>팀 구성</h2>
+        <div class="team-columns">
+          <div class="team-column" data-team="A">
+            <h3>A 팀</h3>
+            <ul class="roster" id="teamAList"></ul>
+          </div>
+          <div class="team-column" data-team="B">
+            <h3>B 팀</h3>
+            <ul class="roster" id="teamBList"></ul>
+          </div>
+        </div>
+      </section>
+      <section class="panel-section">
+        <h2>관전자</h2>
+        <ul class="roster" id="spectatorList"></ul>
+      </section>
+      <section class="panel-section">
+        <h2>모바일 컨트롤러</h2>
+        <ul class="controller-list" id="controllerList"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <dialog id="qrDialog">
+    <div class="dialog-content">
+      <h2>모바일 컨트롤러 연결</h2>
+      <canvas id="qrCanvas" width="280" height="280"></canvas>
+      <p class="muted small" id="qrLink"></p>
+      <div class="dialog-actions">
+        <button class="ghost" id="closeQrBtn">닫기</button>
+      </div>
     </div>
-  </main>
-
-  <aside class="instructions">
-    <h2>시작 가이드</h2>
-    <ul>
-      <li>모바일 Safari에서는 <strong>센서 활성화</strong> 버튼을 눌러야 자이로/가속도계를 사용할 수 있습니다.</li>
-      <li>단말을 수평으로 잡고 라켓 스윙을 해보면 장면 속 라켓이 따라 회전합니다.</li>
-      <li>여러 기기를 접속하면 WebSocket으로 서로의 입력을 전송할 수 있도록 설계되어 있습니다.</li>
-      <li>이 초기 버전을 기반으로 코트, 공, 경기 로직 등을 확장해보세요.</li>
-    </ul>
-  </aside>
+  </dialog>
 
   <script type="module" src="/app.js"></script>
 </body>

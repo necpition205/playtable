@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>PlayTable Controller</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="controller-body">
+  <main class="controller-shell">
+    <header>
+      <h1>PlayTable Controller</h1>
+      <p class="muted">기기를 라켓 컨트롤러로 연결하세요</p>
+    </header>
+
+    <section class="panel-section">
+      <form id="controllerForm" class="form">
+        <label class="form-field">
+          <span>방 코드</span>
+          <input type="text" name="code" maxlength="6" placeholder="예) Q9FLK" required>
+        </label>
+        <label class="form-field">
+          <span>기기 이름</span>
+          <input type="text" name="name" maxlength="24" value="모바일 컨트롤러" required>
+        </label>
+        <button type="submit" class="primary">연결</button>
+      </form>
+    </section>
+
+    <section class="panel-section controller-status" hidden>
+      <h2>상태</h2>
+      <ul class="status-list">
+        <li><span>WebSocket</span><strong id="ctrlWs">연결되지 않음</strong></li>
+        <li><span>센서 권한</span><strong id="ctrlSensor">승인 필요</strong></li>
+        <li><span>방 코드</span><strong id="ctrlRoom">-</strong></li>
+        <li><span>컨트롤러 ID</span><strong id="ctrlId">-</strong></li>
+      </ul>
+      <button id="sensorRequest" class="secondary" disabled>센서 권한 요청</button>
+    </section>
+
+    <section class="panel-section sensor-readout" hidden>
+      <h2>센서 출력</h2>
+      <pre id="sensorLog" class="log">대기 중...</pre>
+    </section>
+  </main>
+
+  <script type="module" src="/controller.js"></script>
+</body>
+</html>
